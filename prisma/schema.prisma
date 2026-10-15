@@ -1,0 +1,309 @@
+// MediCare Backend — Prisma schema (Next.js port)
+// Thresholds redesigned (Task 3): lower_bound + upper_bound → single alert per out-of-range parameter.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = "file:./dev.db"
+}
+
+model User {
+  id            String   @id @default(cuid())
+  name          String
+  phoneNumber   String   @unique
+  passwordHash  String?
+  role          String   @default("patient") // admin | patient
+  patientToken  String?  @unique
+  status        String   @default("active") // active | suspended
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  profile       PatientProfile?
+  healthRecords HealthRecord[]
+  alerts        Alert[]
+  documents     PatientDocument[]
+  symptomLogs   SymptomLog[]
+  consultations Consultation[]
+  appointments  Appointment[]
+  treatmentPlans TreatmentPlan[]
+  thresholds    AlertThreshold[]
+}
+
+model PatientProfile {
+  id             String   @id @default(cuid())
+  userId         String   @unique
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  birthDate      DateTime?
+  smokingStatus  String?  // never | former | current
+  additionalInfo String?
+  updatedAt      DateTime @updatedAt
+
+  diseases       PatientDisease[]
+  surgeries      PatientSurgery[]
+  medications    PatientMedication[]
+}
+
+/// Junction: patient ↔ disease catalog (with optional custom_name)
+model PatientDisease {
+  id              String   @id @default(cuid())
+  profileId       String
+  profile         PatientProfile @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  diseaseId       String?
+  disease         Disease? @relation(fields: [diseaseId], references: [id], onDelete: SetNull)
+  customName      String?
+  createdAt       DateTime @default(now())
+
+  @@index([profileId])
+}
+
+/// Junction: patient ↔ surgery catalog (with optional custom_name)
+model PatientSurgery {
+  id              String   @id @default(cuid())
+  profileId       String
+  profile         PatientProfile @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  surgeryId       String?
+  surgery         Surgery? @relation(fields: [surgeryId], references: [id], onDelete: SetNull)
+  customName      String?
+  createdAt       DateTime @default(now())
+
+  @@index([profileId])
+}
+
+/// Patient medications (current meds with dose + frequency + schedule)
+model PatientMedication {
+  id              String   @id @default(cuid())
+  profileId       String
+  profile         PatientProfile @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  medicationId    String?
+  medication      Medication? @relation(fields: [medicationId], references: [id], onDelete: SetNull)
+  customName      String?
+  dose            String?  // "75mg"
+  frequency       String?  // "مرة يومياً"
+  scheduleTimes   String   @default("[]") // JSON: ["08:30","21:00"]
+  instructions    String?
+  status          String   @default("active") // active | stopped
+  createdAt       DateTime @default(now())
+
+  @@index([profileId])
+}
+
+model HealthRecord {
+  id                 String   @id @default(cuid())
+  patientId          String // user_id (the patient)
+  patient            User     @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  bpSystolic         Int?
+  bpDiastolic        Int?
+  heartRate          Int?
+  currentMedications String?
+  notes              String?
+  attachments        String   @default("[]") // JSON array of file refs
+  createdAt          DateTime @default(now())
+
+  alerts Alert[]
+
+  @@index([patientId, createdAt])
+}
+
+model PatientDocument {
+  id          String   @id @default(cuid())
+  patientId   String
+  patient     User     @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  type        String   @default("other") // ecg | echo | lab | other
+  title       String?
+  notes       String?
+  attachments String   @default("[]")
+  createdAt   DateTime @default(now())
+
+  @@index([patientId, createdAt])
+}
+
+// ── Symptom Logs (تسجيل الأعراض بدون قياسات) — لتطبيق الموبايل ──
+model SymptomLog {
+  id          String   @id @default(cuid())
+  patientId   String
+  patient     User     @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  symptoms    String   @default("[]") // JSON: [{name, isCritical}]
+  customText  String?
+  createdAt   DateTime @default(now())
+
+  @@index([patientId, createdAt])
+}
+
+model Consultation {
+  id             String   @id @default(cuid())
+  patientId      String
+  patient        User     @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  category       String   @default("regular") // immediate | regular
+  typeId         String?
+  customType     String?
+  reason         String
+  symptoms       String   @default("[]") // JSON array of {name, is_critical}
+  customSymptomText String? // free-text symptoms written by the patient
+  context        String?  // JSON object — auto-built (latest reading + freshness)
+  status         String   @default("pending") // pending | responded | closed
+  whatsappLink   String?
+  notes          String?  // legacy free-text notes kept for back-compat
+  doctorResponse String? // JSON object {response_text, recommended_action, follow_up_date}
+  createdAt      DateTime @default(now())
+  respondedAt    DateTime?
+
+  @@index([patientId, createdAt])
+}
+
+model Appointment {
+  id            String   @id @default(cuid())
+  patientId     String
+  patient       User     @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  scheduledDate DateTime
+  scheduledTime String
+  status        String   @default("requested") // requested | confirmed | cancelled | completed
+  whatsappLink  String?
+  notes         String?
+  createdAt     DateTime @default(now())
+  confirmedAt   DateTime?
+
+  @@index([patientId, scheduledDate])
+}
+
+// ── Treatment Plan (Task 1: table KEPT, routes DISABLED) ──
+model TreatmentPlan {
+  id              String   @id @default(cuid())
+  patientId       String
+  patient         User     @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  instructions    String?
+  followUpDates   String   @default("[]") // JSON array of ISO dates
+  clinicalNotes   String?
+  isCurrent       Boolean  @default(true)
+  createdAt       DateTime @default(now())
+
+  @@index([patientId, createdAt])
+}
+
+// ── Alert Thresholds (Task 3 REDESIGN: lower_bound + upper_bound, single alert) ──
+model AlertThreshold {
+  id            String   @id @default(cuid())
+  adminId       String
+  admin         User     @relation(fields: [adminId], references: [id], onDelete: Cascade)
+  parameterName String   // bp_systolic | bp_diastolic | heart_rate
+  lowerBound    Float?   // value below this → alert
+  upperBound    Float?   // value above this → alert
+  isActive      Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([parameterName, isActive])
+}
+
+// ── Alerts (Task 4: dedup — one unread alert per patient+parameter) ──
+model Alert {
+  id              String   @id @default(cuid())
+  patientId       String
+  patient         User     @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  healthRecordId  String?
+  healthRecord    HealthRecord? @relation(fields: [healthRecordId], references: [id], onDelete: SetNull)
+  parameterName   String
+  value           String
+  bound           String? // "lower" | "upper" — which bound was crossed (Task 3 single alert)
+  thresholdValue  Float?
+  severity        String   @default("warning") // warning | critical
+  status          String   @default("unread") // unread | read | resolved
+  telegramSent    Boolean  @default(false)
+  createdAt       DateTime @default(now())
+  readAt          DateTime?
+
+  @@index([patientId, parameterName, status])
+  @@index([createdAt])
+  @@index([status])
+}
+
+// ── Settings (key/value) ──
+model Setting {
+  key   String @id
+  value String?
+}
+
+model AuditLog {
+  id        Int      @id @default(autoincrement())
+  actorId   String?
+  actorIp   String?
+  action    String
+  target    String?
+  status    String
+  meta      String?
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([action])
+}
+
+model RequestLog {
+  id         Int      @id @default(autoincrement())
+  method     String
+  path       String
+  status     Int
+  durationMs Int?
+  userId     String?
+  ip         String?
+  createdAt  DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([status])
+}
+
+// ═══ CATALOGS (doctor-curated) ═══
+
+model Disease {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  category  String?
+  createdAt DateTime @default(now())
+  patients  PatientDisease[]
+}
+
+model Surgery {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  category  String?
+  createdAt DateTime @default(now())
+  patients  PatientSurgery[]
+}
+
+model Symptom {
+  id         String   @id @default(cuid())
+  name       String   @unique
+  category   String?
+  isCritical Boolean  @default(false) // doctor-flagged → auto-alert when selected
+  createdAt  DateTime @default(now())
+}
+
+model Medication {
+  id          String   @id @default(cuid())
+  brandName   String
+  genericName String?
+  form        String? // tablet | capsule | syrup | injection
+  category    String? // cardiac | diabetes | ...
+  createdAt   DateTime @default(now())
+  patients    PatientMedication[]
+}
+
+model ConsultationType {
+  id        String   @id @default(cuid())
+  name      String
+  category  String   // immediate | regular
+  createdAt DateTime @default(now())
+}
+
+// ═══ DOCTOR WORKING HOURS (weekly recurring) ═══
+
+model WorkingHour {
+  id        Int      @id @default(autoincrement())
+  dayOfWeek Int      // 0=Sun .. 6=Sat
+  startTime String   // "09:00"
+  endTime   String   // "17:00"
+  isActive  Boolean  @default(true)
+
+  @@unique([dayOfWeek])
+}

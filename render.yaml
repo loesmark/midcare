@@ -1,0 +1,88 @@
+# Render Blueprint — MediCare Dashboard
+# https://render.com/docs/blueprint-spec
+#
+# Usage:
+#   1. Push this file to the root of your GitHub repo.
+#   2. On Render dashboard: New + → Blueprint → select your repo.
+#   3. Render auto-creates the web service + cron job from this spec.
+#   4. Fill in the `sync: false` env vars in the Render dashboard
+#      (TURSO_DATABASE_URL, TURSO_AUTH_TOKEN, JWT_SECRET, ADMIN_BACKUP_PASSCODE).
+
+services:
+  # ─────────────────────────────────────────────────────────────
+  #  Web Service — Next.js (standalone) on Node runtime
+  # ─────────────────────────────────────────────────────────────
+  - type: web
+    name: medicare-dashboard
+    runtime: node
+    plan: free
+    branch: main
+    # Build pipeline:
+    #   1) npm install               → install all dependencies
+    #   2) npx prisma generate        → generate Prisma Client (the
+    #      schema's `datasource` uses a hardcoded file URL, but the
+    #      Prisma CLI still needs DATABASE_URL to be a non-empty
+    #      string at runtime, so we set a dummy value here).
+    #   3) npm run build             → next build (output: standalone)
+    #      followed by `cp -r .next/static` and `cp -r public` into
+    #      the standalone folder (see package.json "build" script).
+    buildCommand: >-
+      npm install &&
+      DATABASE_URL=file:./db/dummy.db npx prisma generate &&
+      npm run build
+    # Start: Render's Node runtime has no `bun`, so we use `node`.
+    # HOSTNAME=0.0.0.0 is required so the standalone server binds to
+    # all interfaces (Render's reverse proxy needs this). PORT is
+    # injected by Render automatically and read by Next.js standalone.
+    startCommand: HOSTNAME=0.0.0.0 node .next/standalone/server.js
+    autoDeploy: true
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      # DATABASE_URL is a dummy — the app uses the Turso adapter at
+      # runtime via TURSO_DATABASE_URL. DATABASE_URL is only needed
+      # for Prisma CLI during build (already set in buildCommand).
+      - key: DATABASE_URL
+        value: file:./db/dummy.db
+      # ── Required secrets — set these in the Render dashboard ──
+      - key: TURSO_DATABASE_URL
+        sync: false
+        # e.g. libsql://medicare-<your-user>.turso.io
+        # Get it with:    turso db show medicare --url
+      - key: TURSO_AUTH_TOKEN
+        sync: false
+        # Get it with:    turso db tokens create medicare
+      - key: JWT_SECRET
+        sync: false
+        # Generate with: openssl rand -hex 32
+      - key: ADMIN_BACKUP_PASSCODE
+        sync: false
+        # Pick a strong string — used to gate DB download
+      # ── Optional (can also be set later from the admin UI) ──
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_CHAT_ID
+        sync: false
+      - key: TELEGRAM_ALERTS_CHAT_ID
+        sync: false
+      - key: DOCTOR_WHATSAPP_NUMBER
+        sync: false
+      - key: JWT_EXPIRES_IN
+        value: 7d
+
+  # ─────────────────────────────────────────────────────────────
+  #  Cron Job — Keep-alive ping to prevent Free-Tier spin-down
+  #  Render Free web services spin down after 15 min of inactivity.
+  #  This cron hits /health every 10 minutes so the web service
+  #  stays warm. (Each Free account gets 1 cron job — this is it.)
+#  - type: cron
+#    name: medicare-keepalive
+#    runtime: node
+#    plan: free
+#    schedule: "*/10 * * * *"   # every 10 minutes
+#    command: >-
+#      curl -fsS -o /dev/null -w "%{http_code}" $RENDER_EXTERNAL_URL/health || true
+#    envVars:
+#      - key: RENDER_EXTERNAL_URL
+#        sync: false
