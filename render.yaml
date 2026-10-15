@@ -18,16 +18,14 @@ services:
     plan: free
     branch: main
     # Build pipeline:
-    #   1) npm install               → install all dependencies
-    #   2) npx prisma generate        → generate Prisma Client (the
-    #      schema's `datasource` uses a hardcoded file URL, but the
-    #      Prisma CLI still needs DATABASE_URL to be a non-empty
-    #      string at runtime, so we set a dummy value here).
-    #   3) npm run build             → next build (output: standalone)
-    #      followed by `cp -r .next/static` and `cp -r public` into
-    #      the standalone folder (see package.json "build" script).
+    #   1) npm install --include=dev → install all dependencies INCLUDING
+    #      devDependencies (Render sets NODE_ENV=production which by
+    #      default skips devDependencies, but we need them for build:
+    #      typescript, tsx, eslint-config-next, etc.).
+    #   2) npx prisma generate        → generate Prisma Client.
+    #   3) npm run build             → next build (output: standalone).
     buildCommand: >-
-      npm install &&
+      npm install --include=dev &&
       DATABASE_URL=file:./db/dummy.db npx prisma generate &&
       npm run build
     # Start: Render's Node runtime has no `bun`, so we use `node`.
